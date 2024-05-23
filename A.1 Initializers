@@ -1,0 +1,169 @@
+
+if ~exist('numberNodes', 'var')
+    numberNodes = 100;
+end
+if ~exist('queueLength', 'var')
+    queueLength = ceil(numberNodes / 2);
+end
+if ~exist('mode', 'var')
+    mode = 8;
+end
+if ~exist('ACOUSTIC_INDEX', 'var')
+    ACOUSTIC_INDEX = 2;
+end
+if ~exist('ACOUSTIC_RANGE', 'var')
+    ACOUSTIC_RANGE = 100;
+end
+if ~exist('ACOUSTIC_SEND_ENERGY', 'var')
+    ACOUSTIC_SEND_ENERGY = 0.1136 / 1000;
+end
+if ~exist('ACOUSTIC_RECEIVE_ENERGY', 'var')
+    % estimate until I have real values
+    ACOUSTIC_RECEIVE_ENERGY = ACOUSTIC_SEND_ENERGY / 1.8;
+end % based off change in current from Detweiler thesis p.71, table 3.1
+if ~exist('RADIO_RANGE', 'var')
+    RADIO_RANGE = 200;
+end
+if ~exist('RADIO_INDEX', 'var')
+    RADIO_INDEX = 1;
+end
+if ~exist('RADIO_SEND_ENERGY', 'var')
+    RADIO_SEND_ENERGY = 0.00016 / 1000;
+end
+if ~exist('RADIO_RECEIVE_ENERGY', 'var')
+    RADIO_RECEIVE_ENERGY = RADIO_SEND_ENERGY / 3.5;
+end % based off change in current from Detweiler thesis p.71, table 3.1
+if ~exist('ACOUSTIC_SUCCESS', 'var')
+    ACOUSTIC_SUCCESS = 1;
+end
+if ~exist('RADIO_SUCCESS', 'var')
+    RADIO_SUCCESS = 1;
+end
+if ~exist('MIN_SEND_DELAY', 'var')
+    MIN_SEND_DELAY = 10;
+end
+if ~exist('PROCESSING_ENERGY', 'var')
+    % 4*numberNodes*this == process power per iteration
+    % below is 3.3*0.059, V*I (Watts)
+    PROCESSING_ENERGY = 3.3 * (0.059 / 1000) * (4 * numberNodes);
+    % this is the
+end
+if ~exist('WINCH_ENERGY', 'var')
+    WINCH_ENERGY = 15; % 15 J/meter, multiply by
+end
+
+% Parameters for topology init
+MINIMUM_X = 30;
+MINIMUM_Y = 0;
+MINIMUM_Z = -20;
+MAXIMUM_X = 60;
+MAXIMUM_Y = 0;
+% MAXIMUM_Z = 0;
+
+% Create the initial topology matrix (n, 3) where n=number of nodes
+%
+% Can either use an existing one that is passed via input or create a
+% random one based on input constraints
+NodePositions = zeros(numberNodes, 3);
+
+if exist('NodePositions', 'var')
+    numberNodes = length(NodePositions(:, 1));
+else
+    NodePositions = zeros(numberNodes, 3);
+    prev = [0 0 0];
+    for i = 1:numberNodes
+        x = 0;
+        y = 0;
+        z = 0;
+        while x < MINIMUM_X || x > MAXIMUM_X
+            if i == 1
+                x = 0;
+                break;
+            end
+            x = rand(1) * MAXIMUM_X;
+        end
+        x = x + prev(1);
+        % while y < MINIMUM_Y || y > MAXIMUM_Y
+        %     y = rand(1) * MAXIMUM_Y;
+        % end
+        % y = y + prev(2);
+        y = 0;
+        %
+        % Z operates on negatives, so we go from max (assumed 0) to min
+        % This means we go from a negative to zero. Just look at the code!
+        z = rand(1) * MINIMUM_Z;
+        %
+        %
+        %
+        prev = [x y z];
+        NodePositions(i, :) = prev;
+    end
+end
+clear i x y z prev
+% clear MAXIMUM_X MAXIMUM_Y %MAXIMUM_Z
+% clear MINIMUM_X MINIMUM_Y MINIMUM_Z
+
+% Create connectivity matrix based on topology
+%
+% Inputs: NodePositions, numberNodes
+%
+% Outputs: ConnectivityMatrix
+
+% Create empty matrix
+ConnectivityMatrix = zeros(numberNodes, numberNodes, 2);
+% Figure out neighbors for both communication types
+ConnectivityMatrix(:, :, RADIO_INDEX) = squareform(pdist(NodePositions(:, 1)));
+ConnectivityMatrix(:, :, ACOUSTIC_INDEX) = squareform(pdist(NodePositions(:, 1:2)));
+for i = 1:length(ConnectivityMatrix(:, :, RADIO_INDEX))
+    for j = 1:length(ConnectivityMatrix(:, :, RADIO_INDEX))
+        if (ConnectivityMatrix(i, j, RADIO_INDEX) > RADIO_RANGE)
+            ConnectivityMatrix(i, j, RADIO_INDEX) = 0;
+        end
+        if (ConnectivityMatrix(i, j, ACOUSTIC_INDEX) > ACOUSTIC_RANGE)
+            ConnectivityMatrix(i, j, ACOUSTIC_INDEX) = 0;
+        end
+    end
+end
+% Ensure logical form to matrix instead of numeric
+ConnectivityMatrix = logical(ConnectivityMatrix);
+clear i j
+
+% Hardwiring for thesis right now
+%
+%
+% NOTE: Read pointer and write pointer are forbidden from being the same
+% except at the start where they are both 1. After that, they are never
+% allowed to have the same value. This simplifies modification logic
+% but requires us to have a queue length 1 more than necessary to make
+% up for the "loss" of a cell when they could be equal.
+% Queue length suggested to be number of nodes or greater
+if ~(exist('queueLength', 'var'))
+    queueLength = numberNodes;
+end
+
+% Following Nick's lead, packets will be represented as
+% a 1x4 cell array, with each field being: Dst, Src, Protocol, Data
+% Packets:
+% Dst Src Protocol Data
+% Packet{1x4} = {} {} {} {}
+Packet = cell(1, 4);
+% the following matrices are "two pages" each. Page 1 is radio, page 2 is
+% acoustic.
+txQueue = cell(numberNodes, queueLength + 1, 2);
+rxQueue = cell(numberNodes, queueLength + 1, 2);
+% Implementation of buffering.
+% every node will read from its rxQueue, and write to its txQueue
+% another script will handle the juggling of messages from tx to rx.
+txQueuePointers = ones(numberNodes, 2, 2);
+rxQueuePointers = ones(numberNodes, 2, 2);
+% these arrays will store read and write pointers
+% as usual, the row indicates the node being referenced
+% I suggest the convention of [read, write], txQueuePointers[1,1] is
+% txQueue read pointer for node 1.
+% there is nothing wrong with leaving queues empty for now. Cells
+% are basically pre-allocated blocks of memory. Filling them now or later
+% makes no difference. A variable may only take a few bytes, but the overhead
+% required of a cell could make storing that value in a cell a matter of
+% kilobytes.
+messagesSentAndReceived = zeros(numberNodes, 2, 2);
+
