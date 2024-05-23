@@ -1,0 +1,405 @@
+
+function [outqueue, rptr, wptr] = add2buffer(inqueue, readptr, writeptr, pkt)
+queueLength = length(inqueue);
+outqueue = inqueue;
+wptr = writeptr;
+rptr = readptr;
+
+if wptr == queueLength
+    outqueue{wptr} = pkt;
+    wptr = 1;
+    if rptr == 1
+        rptr = rptr + 1;
+    end
+elseif wptr == rptr
+    outqueue{wptr} = pkt;
+    wptr = wptr + 1;
+else
+    outqueue{wptr} = pkt;
+    wptr = wptr + 1;
+    if wptr == rptr
+        rptr = rptr + 1;
+        if rptr > queueLength
+            rptr = 1;
+        end
+    end
+end
+
+if isempty(outqueue{rptr})
+    if wptr == 1
+        rptr = length(outqueue);
+    else
+        rptr = wptr - 1;
+    end
+end
+
+end
+
+function path = centralizedshortestpathalgorithm(selfID, dstID, Connectivity, NodePos, Weightedornot)
+NodeCount = size(Connectivity, 1);
+NodeCount = NodeCount(1);
+if Weightedornot
+    Weights = -Connectivity;
+    for i = 1:NodeCount
+        for j = 1:NodeCount
+            Weights(i, j) = Weights(i, j) * NodePos(j, 3);
+        end
+    end
+else
+    Weights = +Connectivity;
+end
+for i = 1:NodeCount
+    Weights(i, i) = inf;
+end
+[~, path] = dijkstra(Connectivity, Weights, selfID, dstID);
+end
+
+function action = determineNextAction(pkt, id)
+if (id < pkt{1} && id < pkt{2}) || (id > pkt{1} && id > pkt{2})
+    action = 0;
+    return
+end
+if pkt{1} == id
+    if pkt{3} == 2
+        action = 1;
+    elseif pkt{3} == 0
+        action = 4;
+    elseif pkt{3} == 5
+        action = 5;
+    end
+    return
+end
+if pkt{3} == 0
+    action = 3;
+else
+    action = 2;
+end
+end
+
+function [costs, paths] = dijkstra(AorV, xyCorE, SID, FID, iswaitbar)
+error(nargchk(2, 5, nargin));
+allpositive = 1;
+[n, nc] = size(AorV);
+[m, mc] = size(xyCorE);
+[E, cost] = processInputs(AorV, xyCorE);
+if nargin < 5
+    iswaitbar = 0;
+end
+if nargin < 4
+    FID = (1:n);
+end
+if nargin < 3
+    SID = (1:n);
+end
+if max(SID) > n || min(SID) < 1
+    eval(['help' mfilename]);
+    error('Invalid [SID] input. See help notes above.');
+end
+if max(FID) > n || min(FID) < 1
+    eval(['help' mfilename]);
+    error('Invalid [FID] input. See help notes above.');
+end
+isreversed = 0;
+if length(FID) < length(SID)
+    E = E(:, [2 1]);
+    cost = cost';
+    tmp = SID;
+    SID = FID;
+    FID = tmp;
+    isreversed = 1;
+end
+L = length(SID);
+M = length(FID);
+costs = zeros(L, M);
+paths = num2cell(nan(L, M));
+if iswaitbar, wbh = waitbar(0, 'Please Wait...'); end
+for k = 1:L
+    if allpositive, TBL = sparse(1, n); else TBL = NaN(1, n); end
+    mincost = Inf(1, n);
+    settled = zeros(1, n);
+    path = num2cell(nan(1, n));
+    I = SID(k);
+    mincost(I) = 0;
+    TBL(I) = 0;
+    settled(I) = 1;
+    path(I) = {I};
+    while any(~settled(FID))
+        TAB = TBL;
+        if allpositive, TBL(I) = 0; else TBL(I) = NaN; end
+        nids = find(E(:, 1) == I);
+        for kk = 1:length(nids)
+            J = E(nids(kk), 2);
+            if ~settled(J)
+                c = cost(I, J);
+                if allpositive, empty = ~TAB(J); else empty = isnan(TAB(J)); end
+                if empty || (TAB(J) > (TAB(I) + c))
+                    TBL(J) = TAB(I) + c;
+                    if isreversed
+                        path{J} = [J path{I}];
+                    else
+                        path{J} = [path{I} J];
+                    end
+                else
+                    TBL(J) = TAB(J);
+                end
+            end
+        end
+    end
+    if allpositive, K = find(TBL); else K = find(~isnan(TBL)); end
+    N = find(TBL(K) == min(TBL(K)));
+    if isempty(N)
+        break
+    else
+        I = K(N(1));
+        mincost(I) = TBL(I);
+        settled(I) = 1;
+    end
+end
+costs(k, :) = mincost(FID);
+paths(k, :) = path(FID);
+if iswaitbar, waitbar(k/L, wbh); end
+end
+if iswaitbar, close(wbh); end
+if isreversed
+    costs = costs';
+    paths = paths';
+end
+if L == 1 && M == 1
+    paths = paths{1};
+end
+
+function [E, C] = processInputs(AorV, xyCorE)
+C = sparse(n, n);
+if n == nc
+    if m == n
+        if m == mc
+            A = AorV;
+            A = A - diag(diag(A));
+            C = xyCorE;
+            allpositive = all(C(logical(A)) > 0);
+            E = a2e(A);
+        else
+            A = AorV;
+            A = A - diag(diag(A));
+            xy = xyCorE;
+            E = a2e(A);
+            D = ve2d(xy, E);
+            allpositive = all(D > 0);
+            for row = 1:length(D)
+                C(E(row, 1), E(row, 2)) = D(row);
+            end
+        end
+    else
+        eval(['help ' mfilename]);
+        error('Invalid [A, xy] or [A, cost] inputs. See help notes above.');
+    end
+else
+    if mc == 2
+        V = AorV;
+        E = xyCorE;
+        D = ve2d(V, E);
+        allpositive = all(D > 0);
+        for row = 1:m
+            C(E(row, 1), E(row, 2)) = D(row);
+        end
+    elseif mc == 3
+        E3 = xyCorE;
+        allpositive = all(E3 > 0);
+        E = E3(:, 1:2);
+        for row = 1:m
+            C(E3(row, 1), E3(row, 2)) = E3(row, 3);
+        end
+    else
+        eval(['help ' mfilename]);
+        error('Invalid [V, E] inputs. See help notes above.');
+    end
+end
+end
+
+function E = a2e(A)
+[I, J] = find(A);
+E = [I J];
+end
+
+function D = ve2d(V, E)
+VI = V(E(:, 1), :);
+VJ = V(E(:, 2), :);
+D = sqrt(sum((VI - VJ).^2, 2));
+end
+
+function id = greedyfarthestalgorithm(selfID, conn, dstid, NodePos)
+id = 0;
+Connquickref = [];
+for i = 1:length(conn)
+    if i == selfID
+        continue
+    end
+    if conn(i)
+        Connquickref = [Connquickref i];
+    end
+end
+Pos = zeros(length(Connquickref) + 1, 1);
+for i = 1:(length(Connquickref))
+    Pos(i + 1, :) = NodePos(Connquickref(i), 1);
+end
+Pos(1, :) = NodePos(dstid, 1);
+dist = squareform(pdist(Pos));
+tmpdistance = inf;
+for i = 1:length(dist(:, 1))
+    if i == 1
+        continue
+    end
+    if dist(i, 1) < tmpdistance
+        tmpdistance = dist(i, 1);
+        id = i;
+    end
+end
+if id == 0
+    error('Could not find any neighbors, which is not likely.\n')
+else
+    id = Connquickref(id - 1);
+end
+end
+function id = greedyshallowestalgorithm(selfID, conn, dstid, NodePos)
+id = 0;
+Connquickref = [];
+for i = 1:length(conn)
+    if i == selfID
+        continue
+    end
+    if conn(i)
+        if i == dstid
+            id = i;
+            return
+        else
+            Connquickref = [Connquickref i];
+        end
+    end
+end
+Pos = zeros(length(Connquickref) + 2, 3);
+for i = 1:(length(Connquickref))
+    Pos(i + 2, :) = NodePos(Connquickref(i), :);
+end
+Pos(1, :) = NodePos(dstid, :);
+Pos(2, :) = NodePos(selfID, :);
+dist = squareform(pdist(Pos(:, 1:2)));
+depthiter = -inf;
+for i = 3:length(dist(1, :))
+    if (dist(i, 1) < dist(2, 1)) && (depthiter <= Pos(i, 3))
+        depthiter = Pos(i, 3);
+        id = i;
+    end
+end
+if id == 0
+    error('Could not find any neighbors, which is not likely.\n')
+else
+    id = Connquickref(id - 2);
+end
+end
+
+function nid = modalGetNextNeighbor(selfID, dstID, Connectivity, NodePos, mode)
+switch mode
+    case 1 % farthest acoustic
+        nid = greedyfarthestalgorithm(... 
+            selfID, Connectivity(selfID, :, 2), dstID, NodePos);
+    case 2 % farthest radio
+        nid = greedyfarthestalgorithm(... 
+            selfID, Connectivity(selfID, :, 1), dstID, NodePos);
+    case 3 % shallowest acoustic
+        nid = greedyshallowestalgorithm(... 
+            selfID, Connectivity(selfID, :, 2), dstID, NodePos);
+    case 4 % shallowest radio
+        nid = greedyshallowestalgorithm(... 
+            selfID, Connectivity(selfID, :, 1), dstID, NodePos);
+    case 7
+        nid = greedylookaheadalgorithm(... 
+            selfID, dstID, NodePos, Connectivity(:, :, 1));
+    case 8
+        nid = greedyfarthestalgorithm(... 
+            selfID, Connectivity(selfID, :, 1), dstID, NodePos);
+end
+end
+
+function [pkt, rptr, queue] = readFromBuffer(queue, readptr, writeptr)
+rptr = readptr;
+pkt = queue{rptr};
+queue{rptr} = [];
+if rptr == length(queue)
+    if writeptr ~= 1
+        rptr = 1;
+    elseif rptr == writeptr
+        % means a read at the start of simulation.
+        % nothing to do here.
+    else
+        if writeptr ~= (rptr + 1)
+            rptr = rptr + 1;
+        end
+    end
+end
+end
+
+% need to go through all of txQueue, by row, and add to rxQueue
+% based on connectivity matrix (and depth for radio).
+% handle radio messages
+for i = 1:numberNodes
+    while true
+        [pkt, txQueuePointers(i, 1, RADIO_INDEX), txQueue(i, :, RADIO_INDEX)] = ...
+            readFromBuffer(txQueue(i, :, RADIO_INDEX), ...
+            txQueuePointers(i, 1, RADIO_INDEX), ...
+            txQueuePointers(i, 2, RADIO_INDEX));
+        if isempty(pkt)
+            break
+        end
+        messagesSentAndReceived(i, 1, RADIO_INDEX) = ...
+            messagesSentAndReceived(i, 1, RADIO_INDEX) + 1;
+        % this will run the loop until the txQueue is empty
+        for j = 1:numberNodes
+            % send to all connected peers, if depth is greater than or equal to 0
+            if (ConnectivityMatrix(i, j, RADIO_INDEX) ...
+                    && (NodePositions(i, 3) >= 0) && (NodePositions(j, 3) >= 0) ...
+                    && rand <= RADIO_SUCCESS)
+                [rxQueue(j, :, RADIO_INDEX), ...
+                    rxQueuePointers(j, 1, RADIO_INDEX), ...
+                    rxQueuePointers(j, 2, RADIO_INDEX)] = add2buffer(...
+                    rxQueue(j, :, RADIO_INDEX), ...
+                    rxQueuePointers(j, 1, RADIO_INDEX), ...
+                    rxQueuePointers(j, 2, RADIO_INDEX), pkt);
+                messagesSentAndReceived(j, 2, RADIO_INDEX) = ...
+                    messagesSentAndReceived(j, 2, RADIO_INDEX) + 1;
+            end
+        end
+    end
+end
+for i = 1:numberNodes
+    while true
+        [pkt, txQueuePointers(i, 1, ACOUSTIC_INDEX), txQueue(i, :, ACOUSTIC_INDEX)] = ...
+            readFromBuffer(txQueue(i, :, ACOUSTIC_INDEX), ...
+            txQueuePointers(i, 1, ACOUSTIC_INDEX), ...
+            txQueuePointers(i, 2, ACOUSTIC_INDEX));
+        if isempty(pkt)
+            break
+        end
+        messagesSentAndReceived(i, 1, ACOUSTIC_INDEX) = ...
+            messagesSentAndReceived(i, 1, ACOUSTIC_INDEX) + 1;
+        for j = 1:numberNodes
+            if ConnectivityMatrix(i, j, ACOUSTIC_INDEX) && rand <= ACOUSTIC_SUCCESS
+                [rxQueue(j, :, ACOUSTIC_INDEX), ...
+                    rxQueuePointers(j, 1, ACOUSTIC_INDEX), ...
+                    rxQueuePointers(j, 2, ACOUSTIC_INDEX)] = add2buffer(...
+                    rxQueue(j, :, ACOUSTIC_INDEX), ...
+                    rxQueuePointers(j, 1, ACOUSTIC_INDEX), ...
+                    rxQueuePointers(j, 2, ACOUSTIC_INDEX), pkt);
+                messagesSentAndReceived(j, 2, ACOUSTIC_INDEX) = ...
+                    messagesSentAndReceived(j, 2, ACOUSTIC_INDEX) + 1;
+            end
+        end
+    end
+end
+delaiedSendUpdate;
+UWSimSetup;
+SimRun;
+constantInit;
+topologyInit;
+connectivityCreate;
+delayedSendInit;
+CommInit;
