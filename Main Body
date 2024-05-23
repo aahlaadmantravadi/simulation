@@ -1,0 +1,187 @@
+
+StartPositions = NodePositions;
+energyUsed = zeros(numberNodes, 7);
+timeElapsed = cell(numberNodes, 1);
+SimulationOver = false;
+success = false;
+firstPass = true;
+
+if mode == 5
+    path = centralizedshortestpathalgorithm(1, numberNodes, ConnectivityMatrix(:, :, RADIOINDEX), NodePositions, 0);
+elseif mode == 6
+    path = centralizedshortestpathalgorithm(1, numberNodes, ConnectivityMatrix(:, :, RADIOINDEX), NodePositions, 1);
+else
+    path = modalGetNextNeighbor(1, numberNodes, ConnectivityMatrix, NodePositions, mode);
+end
+
+step = 0;
+timeout = tic;
+
+while ~SimulationOver
+    if toc(timeout) > numberNodes
+        break;
+    end
+    
+    step = step + 1;
+    sendAndReceiveMessages;
+    
+    for i = 1:numberNodes
+        energyUsed(i, 2) = energyUsed(i, 2) + PROCESSINGENERGY;
+        singleNodeTime = tic;
+        
+        if i == 1 && ~isempty(path)
+            pathlength = length(path);
+            queuelength = length(txQueue(1, :, 2));
+            
+            if pathlength < queuelength
+                for j = 1:pathlength
+                    risepacket = Packet;
+                    risepacket{1} = path(j);
+                    risepacket{2} = i;
+                    risepacket{3} = 2;
+                    [txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX)] = ...
+                        add2buffer(txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX), risepacket);
+                    energyUsed(i, 6) = energyUsed(i, 6) + 24*ACOUSTICSENDENERGY;
+                end
+                path = [];
+            else
+                for j = 1:queuelength
+                    risepacket = Packet;
+                    risepacket{1} = path(j);
+                    risepacket{2} = i;
+                    risepacket{3} = 2;
+                    [txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX)] = ...
+                        add2buffer(txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX), risepacket);
+                    energyUsed(i, 6) = energyUsed(i, 6) + 24*ACOUSTICSENDENERGY;
+                end
+                path(1:j) = [];
+            end
+        end
+    end
+    
+    for j = [RADIOINDEX ACOUSTICINDEX]
+        [pkt, rxQueuePointers(i, 1, j), rxQueue(i, :, j)] = ...
+            readFromBuffer(rxQueue(i, :, j), rxQueuePointers(i, 1, j), rxQueuePointers(i, 2, j));
+        while ~isempty(pkt)
+            switch j
+                case RADIOINDEX
+                    energyUsed(i, j + 2) = ...
+                        energyUsed(i, j + 2) + RADIORECEIVEENERGY*(3*8 + 8*length(pkt{4}));
+                case ACOUSTICINDEX
+                    energyUsed(i, j + 2) = ...
+                        energyUsed(i, j + 2) + ACOUSTICRECEIVEENERGY*(3*8 + 8*length(pkt{4}));
+            end
+            switch determineNextAction(pkt, i)
+                case 0 % Do nothing
+                case 1 % Rise
+                    if ~(NodePositions(i, 3) == 0)
+                        if mode ~= 8
+                            energyUsed(i, 7) = ...
+                                energyUsed(i, 7) + abs(NodePositions(i, 3)*WINCHENERGY);
+                            NodePositions(i, 3) = 0;
+                        else
+                            if i == numberNodes
+                                next = i;
+                            else
+                                next = greedylookbackalgorithm(i, numberNodes, pkt{4}(end), NodePositions, ConnectivityMatrix(:, :, RADIOINDEX));
+                            end
+                            if i ~= next
+                                risepacket = Packet;
+                                risepacket{1} = next;
+                                risepacket{2} = i;
+                                risepacket{3} = 5;
+                                [txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX)] = ...
+                                    add2buffer(txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX), risepacket);
+                                energyUsed(i, 6) = energyUsed(i, 6) + 24*ACOUSTICSENDENERGY;
+                            else
+                                energyUsed(i, 7) = ...
+                                    energyUsed(i, 7) + abs(NodePositions(i, 3)*WINCHENERGY);
+                                NodePositions(i, 3) = 0;
+                            end
+                        end
+                    end
+                case 2 % Forward
+                    pkt{4} = [pkt{2} pkt{4}];
+                    pkt{2} = i;
+                    [txQueue(i, :, j), txQueuePointers(i, 1, j), txQueuePointers(i, 2, j)] = ...
+                        add2buffer(txQueue(i, :, j), txQueuePointers(i, 1, j), txQueuePointers(i, 2, j), pkt);
+                    switch j
+                        case RADIOINDEX
+                            energyUsed(i, j + 2) = ...
+                                energyUsed(i, j + 2) + RADIOSENDENERGY*(3*8 + 8*length(pkt{4}));
+                        case ACOUSTICINDEX
+                            energyUsed(i, j + 2) = ...
+                                energyUsed(i, j + 2) + ACOUSTICSENDENERGY*(3*8 + 8*length(pkt{4}));
+                    end
+                case 3 % Payload-forward, send rise command and store for sending
+                    if ~(mode == 5 || mode == 6)
+                        risepkt = Packet;
+                        risepkt{1} = ...
+                            modalGetNextNeighbor(i, pkt{1}, ConnectivityMatrix, NodePositions, mode);
+                        risepkt{2} = i;
+                        risepkt{3} = 2; % rise code
+                        [txQueue(i, :, ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX)] = ...
+                            add2buffer(txQueue(i, :,ACOUSTICINDEX), txQueuePointers(i, 1, ACOUSTICINDEX), txQueuePointers(i, 2, ACOUSTICINDEX), risepkt);
+                        energyUsed(i, 6) = energyUsed(i, 6) + 24*ACOUSTICSENDENERGY;
+                    end
+                    if i == 48
+                        true;
+                    end
+                    pkt{2} = i;
+                   payloadDelayedSend{i}{end} = pkt;
+                case 4 % End sim
+                    SimulationOver = true;
+                    break
+                case 5
+                    energyUsed(i, 7) = ...
+                        energyUsed(i, 7) + abs(NodePositions(i, 3)*WINCHENERGY);
+                    NodePositions(i, 3) = 0;
+                otherwise
+                    error('Invalid action chosen. Not implemented yet?');
+            end
+            
+            [pkt, rxQueuePointers(i, 1, j), rxQueue(i, :, j)] = ...
+                readFromBuffer(rxQueue(i, :, j), rxQueuePointers(i, 1, j), rxQueuePointers(i, 2, j));
+        end
+        
+        if SimulationOver
+            break;
+        end
+    end
+    
+    if SimulationOver
+        break;
+    end
+    
+    if ~isempty(payloadDelayedSend{i}{1})
+        [txQueue(i, :, RADIOINDEX), txQueuePointers(i, 1, RADIOINDEX), txQueuePointers(i, 2, RADIOINDEX)] = ...
+            add2buffer(txQueue(i, :, RADIOINDEX), txQueuePointers(i, 1, RADIOINDEX), txQueuePointers(i, 2, RADIOINDEX), payloadDelayedSend{i}{1});
+        energyUsed(i, 5) = ...
+            energyUsed(i, 5) + (24 + 8*length(payloadDelayedSend{i}{1}{4}))*RADIOSENDENERGY;
+    end
+    
+    timeElapsed{i} = [timeElapsed{i} toc(singleNodeTime)];
+end
+
+if firstPass
+    firstPass = false;
+    pkt = Packet;
+    pkt{1} = numberNodes;
+    pkt{2} = 1;
+    pkt{3} = 0;
+    payloadDelayedSend{1}{end} = pkt;
+    energyUsed(1, 7) = ...
+        energyUsed(1, 7) + abs(NodePositions(1, 3)*WINCHENERGY);
+    NodePositions(1, 3) = 0;
+end
+
+totalTimeElapsed = toc(timeout);
+
+for i = 1:numberNodes
+    energyUsed(i, 1) = sum(energyUsed(i, :));
+end
+
+if SimulationOver
+    success = true;
+end
+
