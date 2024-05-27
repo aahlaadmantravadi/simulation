@@ -1,4 +1,3 @@
-
 if ~exist('numberNodes', 'var')
     numberNodes = 100;
 end
@@ -167,3 +166,4 @@ rxQueuePointers = ones(numberNodes, 2, 2);
 % kilobytes.
 messagesSentAndReceived = zeros(numberNodes, 2, 2);
 
+    
